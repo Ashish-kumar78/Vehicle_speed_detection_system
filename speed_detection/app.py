@@ -25,6 +25,77 @@ torch.load = _patched_torch_load
 
 st.set_page_config(page_title="Vehicle Speed Detection", page_icon="🚙", layout="wide")
 
+# Custom CSS for modern UI enhancement
+st.markdown("""
+    <style>
+    /* Main container */
+    .main > div {
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+    
+    /* Cards and containers */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    div[data-testid="stMetricValue"] {
+        font-size: 2.5rem;
+        font-weight: bold;
+    }
+    
+    div[data-testid="stMetricLabel"] {
+        font-size: 1rem;
+        opacity: 0.9;
+    }
+    
+    /* Buttons */
+    .stButton > button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        color: #2d3748;
+        font-weight: 700;
+    }
+    
+    /* Sidebar */
+    .css-1d391kg {
+        background-color: #f7fafc;
+    }
+    
+    /* Alert boxes */
+    div[data-testid="stAlert"] {
+        border-radius: 10px;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    /* Dataframe styling */
+    div[data-testid="stDataFrame"] {
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # ================================
 # Database Configuration & Connection
 # ================================
@@ -254,58 +325,178 @@ page = st.sidebar.radio("Go to", ["Dashboard", "Live Camera", "Video Upload", "R
 
 if page == "Dashboard":
     st.title("📊 Vehicle Speed Detection Dashboard")
-    st.markdown("Monitor real-time vehicle overspeeding violations.")
+    st.markdown("### Monitor real-time vehicle overspeeding violations")
+    st.markdown("---")
+    
     conn = get_db_connection()
     if conn:
         df = pd.read_sql("SELECT * FROM vehicle_records ORDER BY timestamp DESC LIMIT 50", conn)
         conn.close()
         
         if not df.empty:
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Vehicles Checked", len(df))
-            col2.metric("Overspeed Violations", len(df[df['status'] == 'overspeed']))
-            col3.metric("Blocked Licenses", len(df[df['violation_count'] >= 3]))
+            # Enhanced metrics with columns
+            col1, col2, col3, col4 = st.columns(4)
             
-            st.subheader("Recent Violations Chart")
-            st.bar_chart(df[df['status'] == 'overspeed']['speed_kmh'])
+            with col1:
+                st.metric(
+                    label="🚗 Total Vehicles",
+                    value=len(df),
+                    delta=None
+                )
+            
+            with col2:
+                overspeed_count = len(df[df['status'] == 'overspeed'])
+                st.metric(
+                    label="⚠️ Overspeed Violations",
+                    value=overspeed_count,
+                    delta=f"{(overspeed_count/len(df)*100):.1f}% of total" if len(df) > 0 else None
+                )
+            
+            with col3:
+                blocked_count = len(df[df['violation_count'] >= 3])
+                st.metric(
+                    label="🚫 Blocked Licenses",
+                    value=blocked_count,
+                    delta="Critical" if blocked_count > 0 else "✓ Safe"
+                )
+            
+            with col4:
+                normal_count = len(df[df['status'] == 'normal'])
+                st.metric(
+                    label="✅ Normal Vehicles",
+                    value=normal_count,
+                    delta=f"{(normal_count/len(df)*100):.1f}% compliance" if len(df) > 0 else None
+                )
+            
+            st.markdown("---")
+            
+            # Charts in tabs for better organization
+            tab1, tab2, tab3 = st.tabs(["📈 Speed Analysis", "📊 Violation Trends", "📋 Recent Records"])
+            
+            with tab1:
+                st.subheader("Overspeeding Vehicles - Speed Distribution")
+                overspeed_df = df[df['status'] == 'overspeed'].copy()
+                if not overspeed_df.empty:
+                    st.bar_chart(overspeed_df.set_index('vehicle_number')['speed_kmh'])
+                else:
+                    st.info("No overspeeding records to display")
+            
+            with tab2:
+                st.subheader("Violation Count Distribution")
+                if not df.empty:
+                    violation_counts = df.groupby('violation_count').size()
+                    st.bar_chart(violation_counts)
+                else:
+                    st.info("No data available")
+            
+            with tab3:
+                st.subheader("Latest 20 Records")
+                if not df.empty:
+                    st.dataframe(df.head(20), use_container_width=True)
+                else:
+                    st.info("No records in database yet.")
         else:
-            st.info("No records in database yet.")
+            st.info("📭 No records in database yet. Start monitoring to collect data!")
 
 elif page == "Live Camera":
     st.title("🎥 Live Webcam Detection")
-    st.warning("Ensure your webcam is connected.")
-    if st.button("Start Live Feed"):
-        process_video(0, is_live=True)
+    st.markdown("### Real-time vehicle speed monitoring")
+    st.info("💡 Ensure your webcam is connected and has a clear view of the road")
+    
+    # Display camera settings info
+    with st.expander("📋 Camera Setup Guidelines"):
+        st.markdown("""
+        - Position camera at an elevated angle
+        - Ensure good lighting conditions
+        - Mark two reference lines on the road (visible in frame)
+        - Calibrate distance between lines in Admin Panel
+        - Vehicles should move from top to bottom in frame
+        """)
+    
+    if st.button("🎬 Start Live Feed", use_container_width=True):
+        with st.spinner("Initializing camera and loading models..."):
+            process_video(0, is_live=True)
 
 elif page == "Video Upload":
     st.title("📁 Upload Video for Detection")
-    st.info("Ensure the video shows a clear road view where cars move from top to bottom.")
-    uploaded_file = st.file_uploader("Choose a video file", type=['mp4', 'avi'])
+    st.markdown("### Analyze recorded footage for overspeeding violations")
+    
+    # Show supported formats
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Choose a video file",
+            type=['mp4', 'avi', 'mov', 'mkv'],
+            help="Supported formats: MP4, AVI, MOV, MKV"
+        )
+    
     if uploaded_file is not None:
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(uploaded_file.read())
-        if st.button("Process Video"):
-            process_video(tfile.name)
+        
+        # Show video preview in sidebar
+        with col2:
+            st.video(tfile.name)
+        
+        st.success(f"✅ Uploaded: {uploaded_file.name}")
+        
+        if st.button("🚀 Process Video", use_container_width=True):
+            with st.spinner("⏳ Processing video. This may take a while..."):
+                process_video(tfile.name)
 
 elif page == "Records":
     st.title("🗄️ Database Records")
+    st.markdown("### View and search vehicle records")
+    
     conn = get_db_connection()
     if conn:
-        search = st.text_input("Search by Vehicle Number")
+        # Search with better UI
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            search = st.text_input(
+                "🔍 Search by Vehicle Number",
+                placeholder="Enter vehicle number (e.g., ABC123)"
+            )
+        
         query = "SELECT * FROM vehicle_records"
         if search:
             query += f" WHERE vehicle_number LIKE '%{search}%'"
-            
+            st.info(f"Showing results for: {search}")
+        
         df = pd.read_sql(query, conn)
         conn.close()
-        st.dataframe(df)
+        
+        if not df.empty:
+            # Show summary stats
+            total_col, overspeed_col, normal_col = st.columns(3)
+            with total_col:
+                st.metric("Total Records", len(df))
+            with overspeed_col:
+                st.metric("Violations", len(df[df['status'] == 'overspeed']))
+            with normal_col:
+                st.metric("Normal", len(df[df['status'] == 'normal']))
+            
+            st.markdown("---")
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.warning("⚠️ No records found matching your search.")
 
 elif page == "Admin Panel":
     st.title("⚙️ Admin Settings")
-    st.markdown("For advanced settings like changing Speed Limit, use the Django Admin Panel.")
-    st.code("python manage.py runserver\n# Then go to http://127.0.0.1:8000/admin")
+    st.markdown("### System configuration and management")
+    
+    # Django Admin info box
+    with st.expander("🔐 Access Django Admin Panel", expanded=False):
+        st.markdown("""
+        **For advanced settings:**
+        1. Run `python manage.py runserver` in terminal
+        2. Navigate to http://127.0.0.1:8000/admin
+        3. Login with admin credentials
+        4. Manage speed limits, distance calibration, and email settings
+        """)
     
     st.subheader("Quick Settings Override")
+    st.info("💡 Changes here will update the database immediately")
     conn = get_db_connection()
     if conn:
         cursor = conn.cursor(dictionary=True)
@@ -324,5 +515,15 @@ elif page == "Admin Panel":
                     WHERE id=%s
                 """, (new_limit, new_dist, new_email, settings['id']))
                 conn.commit()
-                st.success("Settings updated successfully!")
+                st.success("✅ Settings updated successfully!")
         conn.close()
+
+# Footer for professional look
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #718096; padding: 20px;'>
+    <p><strong>🚙 Vehicle Speed Detection System</strong></p>
+    <p>Built with Streamlit • YOLOv8 • EasyOCR • Django • MySQL</p>
+    <p>B.Tech Project © 2024</p>
+</div>
+""", unsafe_allow_html=True)

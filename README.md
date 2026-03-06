@@ -8,7 +8,27 @@ A complete B.Tech project integrating OpenCV, YOLOv8, Streamlit, Django, and MyS
 4. **Django Admin Panel**: Used to update speed limits and view records securely at `/admin`.
 5. **License Plate Capture**: Uses EasyOCR to scrape the number plate image if a vehicle violates the speed limit.
 6. **Automatic Emailing**: Send SMTP emails to `admin@gmail.com` on offense.
-7. **Responsive Dashboard**: Beautiful Streamlit interface.
+7. **Modern Dashboard**: Beautiful UI with gradient cards, responsive layouts, tabs, and professional styling.
+8. **Enhanced UX**: Improved navigation, search functionality, real-time stats, and informative tooltips.
+9. **React-Ready Architecture**: Backend API can be easily exposed for React frontend integration (see REACT_INTEGRATION.md).
+
+### Want React.js Frontend? ⚛️
+This project uses Streamlit for simplicity, but you can integrate React.js for a more modern UI!
+
+**Hybrid Approach (Recommended):**
+- Keep Streamlit backend + Add React components
+- Use Django REST Framework to create API endpoints
+- Connect React frontend via axios/fetch
+- Perfect for showcasing full-stack skills
+
+**To convert to React:**
+1. Install Django REST Framework: `pip install djangorestframework django-cors-headers`
+2. Create API endpoints in Django (`/api/vehicles/`, `/api/settings/`)
+3. Build React app: `npx create-react-app frontend`
+4. Use components: Dashboard, LiveCamera, VideoUpload, RecordsTable
+5. Deploy separately or serve via Django
+
+See `REACT_INTEGRATION.md` for detailed steps.
 
 ### Project Structure 📂
 ```
