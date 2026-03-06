@@ -334,7 +334,8 @@ def process_video(video_source, is_live=False):
                                             tracking_id=track_id,
                                             location="Highway Sector 4",
                                             evidence_path=evidence_path,
-                                            conn=conn
+                                            conn=conn,
+                                            distance_m=dist_m
                                         )
                                         
                                         if success:
@@ -384,7 +385,10 @@ def process_video(video_source, is_live=False):
                                             speed_kmh=speed_kmh,
                                             speed_limit=speed_limit,
                                             tracking_id=track_id,
-                                            conn=conn
+                                            location="Highway Sector 4",
+                                            evidence_path=None,
+                                            conn=conn,
+                                            distance_m=dist_m
                                         )
                                         st.success(f"✅ Vehicle {plate} (Normal) saved to database")
                                     except Exception as e:

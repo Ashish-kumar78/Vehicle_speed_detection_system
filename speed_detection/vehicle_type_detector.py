@@ -147,7 +147,7 @@ def save_evidence_frame(frame, vehicle_id, output_dir="evidence_images"):
 
 def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh, 
                           speed_limit, tracking_id=0, location="Highway Sector 4",
-                          evidence_path=None, conn=None):
+                          evidence_path=None, conn=None, distance_m=10.0):
     """
     Store violation record in database with E-Challan
     
@@ -160,6 +160,7 @@ def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh,
         location: Location string
         evidence_path: Path to evidence image
         conn: MySQL connection object
+        distance_m: Distance between detection lines in meters
         
     Returns:
         Boolean success status
@@ -219,19 +220,19 @@ def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh,
                 SET vehicle_type = %s, speed_kmh = %s, status = %s, 
                     timestamp = NOW(), violation_count = %s, 
                     tracking_id = %s, location = %s, 
-                    evidence_image_path = %s
+                    evidence_image_path = %s, distance_m = %s
                 WHERE vehicle_number = %s
             """, (vehicle_type, speed_kmh, status, violation_count, 
-                  tracking_id, location, evidence_path, vehicle_number))
+                  tracking_id, location, evidence_path, distance_m, vehicle_number))
         else:
             cursor.execute("""
                 INSERT INTO vehicle_records 
                 (vehicle_number, vehicle_type, speed_kmh, status, 
                  timestamp, violation_count, tracking_id, location, 
-                 evidence_image_path)
-                VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s, %s)
+                 evidence_image_path, distance_m)
+                VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s)
             """, (vehicle_number, vehicle_type, speed_kmh, status, 
-                  violation_count, tracking_id, location, evidence_path))
+                  violation_count, tracking_id, location, evidence_path, distance_m))
         
         # Generate E-Challan if overspeeding
         if status == "overspeed":
