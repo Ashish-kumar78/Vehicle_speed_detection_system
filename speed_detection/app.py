@@ -16,6 +16,18 @@ import random
 import os
 import torch
 
+# Import vehicle type detection and E-challan module
+from vehicle_type_detector import (
+    get_vehicle_type_from_yolo,
+    get_speed_limit_for_vehicle,
+    get_fine_for_vehicle,
+    save_evidence_frame,
+    store_violation_in_db,
+    send_notification,
+    draw_vehicle_detection,
+    display_violation_alert
+)
+
 # Fix for PyTorch 2.6+ compatibility - monkey patch torch.load to use weights_only=False
 _original_torch_load = torch.load
 def _patched_torch_load(*args, **kwargs):
@@ -224,7 +236,7 @@ def process_video(video_source, is_live=False):
     LINE_1 = 300
     LINE_2 = 450
     dist_m = settings["distance_calibration"]
-    speed_limit = settings["speed_limit"]
+    base_speed_limit = settings["speed_limit"]
     
     # Store crossing times: {track_id: time}
     cross_line1 = {}
@@ -244,11 +256,11 @@ def process_video(video_source, is_live=False):
         if frame_count % 30 == 0:
             settings = fetch_system_settings()
             dist_m = settings["distance_calibration"]
-            speed_limit = settings["speed_limit"]
+            base_speed_limit = settings["speed_limit"]
             
         frame = cv2.resize(frame, (1020, 600))
         
-        # YOLO Tracking
+        # YOLO Tracking with Vehicle Type Detection
         results = model.track(frame, persist=True, classes=ALLOWED_CLASSES, conf=0.6, tracker="bytetrack.yaml")
         
         cv2.line(frame, (0, LINE_1), (1020, LINE_1), (0, 255, 0), 2)
@@ -261,12 +273,24 @@ def process_video(video_source, is_live=False):
             track_ids = results[0].boxes.id.int().cpu().numpy()
             cls_ids = results[0].boxes.cls.int().cpu().numpy()
             
+            # Get vehicle types for all detections
+            vehicle_types = [model.names[cls_id] for cls_id in cls_ids]
+            
+            # Draw enhanced detections with vehicle types
+            frame = draw_vehicle_detection(frame, boxes, track_ids, vehicle_types)
+            
             for box, track_id, cls_id in zip(boxes, track_ids, cls_ids):
                 x1, y1, x2, y2 = box
                 cx = int((x1 + x2) / 2)
                 cy = int((y1 + y2) / 2)
                 
-                v_type = model.names[cls_id]
+                # Get vehicle type from YOLO class
+                v_type = get_vehicle_type_from_yolo(cls_id)
+                if v_type is None:
+                    v_type = model.names[cls_id]  # Fallback to original name
+                
+                # Get DYNAMIC speed limit based on vehicle type
+                speed_limit = get_speed_limit_for_vehicle(v_type)
                 
                 # Check crossing Line 1
                 if LINE_1 - 10 < cy < LINE_1 + 10:
@@ -281,38 +305,77 @@ def process_video(video_source, is_live=False):
                         time_elapsed = cross_line2[track_id] - cross_line1[track_id]
                         if time_elapsed > 0:
                             # Calculate speed
-                            # Time elapsed is in seconds.
                             speed_mps = dist_m / time_elapsed
                             speed_kmh = speed_mps * 3.6
                             
-                            # Determine Status
+                            # Determine Status using DYNAMIC speed limit
                             status = "overspeed" if speed_kmh > speed_limit else "normal"
-                            color = (0, 0, 255) if status == "overspeed" else (0, 255, 0)
-                            
-                            # Extract Plate only if overspeed to save compute, or always
-                            plate = extract_license_plate(frame, box)
-                            
-                            # DB Action
-                            viol_count = save_violation(plate, v_type, speed_kmh, status, dist_m)
                             
                             if status == "overspeed":
-                                if viol_count >= 3:
-                                    alert_placeholder.error(f"🚨 BLOCKED LICENSE: {plate}. 3x overspeed violations. Email Sent!")
-                                elif viol_count == 2:
-                                    alert_placeholder.warning(f"🔴 RED ALERT: {plate} Speed {speed_kmh:.1f} km/h (2nd Offense)")
-                                else:
-                                    alert_placeholder.info(f"🟡 WARNING: {plate} Speed {speed_kmh:.1f} km/h (1st Offense)")
+                                # Extract license plate
+                                plate = extract_license_plate(frame, box)
                                 
-                                send_email_alert(settings['admin_email'], plate, speed_kmh, speed_limit, viol_count)
+                                # Save evidence image
+                                evidence_path = save_evidence_frame(frame, track_id)
+                                
+                                # Store violation with E-Challan generation
+                                conn = get_db_connection()
+                                if conn:
+                                    success = store_violation_in_db(
+                                        vehicle_number=plate,
+                                        vehicle_type=v_type,
+                                        speed_kmh=speed_kmh,
+                                        speed_limit=speed_limit,
+                                        tracking_id=track_id,
+                                        location="Highway Sector 4",
+                                        evidence_path=evidence_path,
+                                        conn=conn
+                                    )
+                                    
+                                    if success:
+                                        # Generate challan number for display
+                                        challan_num = f"CHALLAN_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                                        
+                                        # Display violation alert
+                                        alert_info = display_violation_alert(
+                                            plate, v_type, speed_kmh, speed_limit, "Highway Sector 4"
+                                        )
+                                        
+                                        # Show rich notification
+                                        with st.expander(f"🚨 VIOLATION DETECTED - {plate}", expanded=True):
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                st.metric("Vehicle Type", alert_info['vehicle_type'])
+                                                st.metric("Speed Detected", alert_info['speed_detected'])
+                                            with col2:
+                                                st.metric("Speed Limit", alert_info['speed_limit'])
+                                                st.metric("Excess Speed", alert_info['excess_speed'])
+                                            st.error(f"📍 Location: {alert_info['location']}")
+                                            st.warning(f"🎫 Challan Generated: {challan_num}")
+                                            st.info(f"⏰ Time: {alert_info['date']}")
+                                        
+                                        # Send notification
+                                        send_notification(
+                                            plate, v_type, speed_kmh, speed_limit, 
+                                            challan_num, settings['admin_email']
+                                        )
+                                    conn.close()
                             else:
-                                alert_placeholder.success(f"🟢 SAFE: {plate} Speed {speed_kmh:.1f} km/h")
-                                
+                                # Normal vehicle - just log it
+                                plate = extract_license_plate(frame, box)
+                                conn = get_db_connection()
+                                if conn:
+                                    store_violation_in_db(
+                                        vehicle_number=plate,
+                                        vehicle_type=v_type,
+                                        speed_kmh=speed_kmh,
+                                        speed_limit=speed_limit,
+                                        tracking_id=track_id,
+                                        conn=conn
+                                    )
+                                    conn.close()
+                            
                             processed_ids.add(track_id)
-                
-                # Draw Box
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-                cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
-                cv2.putText(frame, f"ID: {track_id} {v_type}", (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         stframe.image(frame, channels="BGR", use_column_width=True)
     cap.release()
@@ -321,7 +384,7 @@ def process_video(video_source, is_live=False):
 # UI Rendering
 # ================================
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Dashboard", "Live Camera", "Video Upload", "Records", "Admin Panel"])
+page = st.sidebar.radio("Go to", ["Dashboard", "Live Camera", "Video Upload", "E-Challans", "Records", "Admin Panel"])
 
 if page == "Dashboard":
     st.title("📊 Vehicle Speed Detection Dashboard")
@@ -443,6 +506,98 @@ elif page == "Video Upload":
         if st.button("🚀 Process Video", use_container_width=True):
             with st.spinner("⏳ Processing video. This may take a while..."):
                 process_video(tfile.name)
+
+elif page == "E-Challans":
+    st.title("🎫 E-Challan Management System")
+    st.markdown("### Automatic Traffic Violation Enforcement")
+    
+    conn = get_db_connection()
+    if conn:
+        # Show statistics
+        try:
+            total_challans = pd.read_sql("SELECT COUNT(*) as count FROM e_challans", conn)['count'][0]
+            pending_challans = pd.read_sql("SELECT COUNT(*) as count FROM e_challans WHERE status='pending'", conn)['count'][0]
+            total_fines = pd.read_sql("SELECT SUM(fine_amount) as total FROM e_challans WHERE status='pending'", conn)['total'][0] or 0
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Challans", total_challans)
+            with col2:
+                st.metric("Pending Payment", pending_challans)
+            with col3:
+                st.metric("Total Fine Amount", f"₹{total_fines:.2f}")
+            
+            st.markdown("---")
+            
+            # Search and filter
+            col1, col2 = st.columns(2)
+            with col1:
+                search_vehicle = st.text_input("🔍 Search by Vehicle Number")
+            with col2:
+                status_filter = st.selectbox("Filter by Status", ["All", "pending", "paid", "cancelled"])
+            
+            # Build query
+            query = "SELECT * FROM e_challans WHERE 1=1"
+            if search_vehicle:
+                query += f" AND vehicle_number LIKE '%{search_vehicle}%'"
+            if status_filter != "All":
+                query += f" AND status = '{status_filter}'"
+            query += " ORDER BY violation_date DESC LIMIT 50"
+            
+            df = pd.read_sql(query, conn)
+            
+            if not df.empty:
+                st.markdown("### Challan Records")
+                
+                # Display each challan as a card
+                for idx, row in df.iterrows():
+                    with st.expander(f"🎫 {row['challan_number']} - {row['vehicle_number']}", expanded=False):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"**Vehicle Number:** {row['vehicle_number'].upper()}")
+                            st.markdown(f"**Vehicle Type:** {row['vehicle_type'].upper()}")
+                            st.markdown(f"**Speed Detected:** {row['speed_detected']:.1f} km/h")
+                        
+                        with col2:
+                            st.markdown(f"**Speed Limit:** {row['speed_limit']:.1f} km/h")
+                            st.markdown(f"**Fine Amount:** ₹{row['fine_amount']:.2f}")
+                            st.markdown(f"**Status:** {row['status'].upper()}")
+                        
+                        st.markdown(f"**Location:** {row['location']}")
+                        st.markdown(f"**Violation Date:** {row['violation_date'].strftime('%d-%m-%Y %H:%M:%S')}")
+                        
+                        if row['evidence_image_path']:
+                            if os.path.exists(row['evidence_image_path']):
+                                st.image(row['evidence_image_path'], caption="Evidence Image", width=400)
+                        
+                        # Action buttons (for demo purposes)
+                        if row['status'] == 'pending':
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                if st.button("Mark as Paid", key=f"pay_{row['id']}"):
+                                    cursor = conn.cursor()
+                                    cursor.execute("UPDATE e_challans SET status='paid' WHERE id=%s", (row['id'],))
+                                    conn.commit()
+                                    st.success("✅ Marked as paid!")
+                                    time.sleep(1)
+                                    st.rerun()
+                            with col2:
+                                if st.button("Cancel Challan", key=f"cancel_{row['id']}"):
+                                    cursor = conn.cursor()
+                                    cursor.execute("UPDATE e_challans SET status='cancelled' WHERE id=%s", (row['id'],))
+                                    conn.commit()
+                                    st.success("✅ Challan cancelled!")
+                                    time.sleep(1)
+                                    st.rerun()
+            else:
+                st.info("No challans found matching your criteria.")
+                
+        except Exception as e:
+            st.warning(f"E-Challan table might not exist yet: {e}")
+            st.info("Challans will be automatically generated when violations are detected.")
+        
+        conn.close()
 
 elif page == "Records":
     st.title("🗄️ Database Records")

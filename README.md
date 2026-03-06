@@ -10,7 +10,10 @@ A complete B.Tech project integrating OpenCV, YOLOv8, Streamlit, Django, and MyS
 6. **Automatic Emailing**: Send SMTP emails to `admin@gmail.com` on offense.
 7. **Modern Dashboard**: Beautiful UI with gradient cards, responsive layouts, tabs, and professional styling.
 8. **Enhanced UX**: Improved navigation, search functionality, real-time stats, and informative tooltips.
-9. **React-Ready Architecture**: Backend API can be easily exposed for React frontend integration (see REACT_INTEGRATION.md).
+9. **AI Vehicle Type Detection** 🆕: Automatically classifies vehicles (Car, Truck, Bus, Motorcycle) using YOLOv8.
+10. **Dynamic Speed Limits** 🆕: Different speed limits for each vehicle type (Car: 80, Truck: 60, Bus: 70, Bike: 60).
+11. **Automatic E-Challan System** 🆕: Generates digital challans with unique IDs, fines, and evidence images.
+12. **React-Ready Architecture**: Backend API can be easily exposed for React frontend integration (see REACT_INTEGRATION.md).
 
 ### Want React.js Frontend? ⚛️
 This project uses Streamlit for simplicity, but you can integrate React.js for a more modern UI!
@@ -25,10 +28,39 @@ This project uses Streamlit for simplicity, but you can integrate React.js for a
 1. Install Django REST Framework: `pip install djangorestframework django-cors-headers`
 2. Create API endpoints in Django (`/api/vehicles/`, `/api/settings/`)
 3. Build React app: `npx create-react-app frontend`
-4. Use components: Dashboard, LiveCamera, VideoUpload, RecordsTable
+4. Use components: Dashboard, LiveCamera, VideoUpload, RecordsTable, EChallans
 5. Deploy separately or serve via Django
 
 See `REACT_INTEGRATION.md` for detailed steps.
+
+### 🆕 AI Vehicle Type Detection & E-Challan
+
+The system now includes **intelligent traffic enforcement**:
+
+**Vehicle Classification:**
+- 🚗 Car - 80 km/h limit
+- 🚛 Truck - 60 km/h limit
+- 🚌 Bus - 70 km/h limit  
+- 🏍️ Motorcycle - 60 km/h limit
+
+**Automatic Enforcement:**
+1. Detects vehicle type using YOLOv8
+2. Applies dynamic speed limit
+3. Captures evidence image
+4. Reads license plate with OCR
+5. Generates unique challan number
+6. Stores violation in database
+7. Sends notification to authorities
+
+**E-Challan Management:**
+- View all generated challans
+- Search by vehicle number
+- Filter by status (pending/paid/cancelled)
+- Display evidence images
+- Mark as paid or cancel
+- Track total fines collected
+
+See `VEHICLE_TYPE_ECHALLAN.md` for complete documentation.
 
 ### Project Structure 📂
 ```
