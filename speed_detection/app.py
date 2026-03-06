@@ -455,7 +455,7 @@ if page == "Dashboard":
             with tab3:
                 st.subheader("Latest 20 Records")
                 if not df.empty:
-                    st.dataframe(df.head(20), use_container_width=True)
+                    st.dataframe(df.head(20), width="stretch")
                 else:
                     st.info("No records in database yet.")
         else:
@@ -632,7 +632,7 @@ elif page == "Records":
                 st.metric("Normal", len(df[df['status'] == 'normal']))
             
             st.markdown("---")
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
         else:
             st.warning("⚠️ No records found matching your search.")
 

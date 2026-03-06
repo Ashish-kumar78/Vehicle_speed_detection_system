@@ -164,6 +164,22 @@ def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh,
     Returns:
         Boolean success status
     """
+    # Convert numpy types to Python native types to avoid MySQL conversion errors
+    if hasattr(speed_kmh, 'item'):
+        speed_kmh = float(speed_kmh.item())
+    else:
+        speed_kmh = float(speed_kmh)
+    
+    if hasattr(speed_limit, 'item'):
+        speed_limit = float(speed_limit.item())
+    else:
+        speed_limit = float(speed_limit)
+    
+    if hasattr(tracking_id, 'item'):
+        tracking_id = int(tracking_id.item())
+    else:
+        tracking_id = int(tracking_id)
+    
     if conn is None:
         try:
             conn = mysql.connector.connect(
