@@ -394,7 +394,7 @@ def process_video(video_source, is_live=False):
                             
                             processed_ids.add(track_id)
 
-        stframe.image(frame, channels="BGR", use_column_width=True)
+        stframe.image(frame, channels="BGR", width="stretch")
     
     cap.release()
     
