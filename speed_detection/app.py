@@ -249,10 +249,15 @@ def process_video(video_source, is_live=False):
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_count = 0
-
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Create progress bar
+    progress_bar = st.progress(0)
+    
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret:
+        if not ret or frame is None or frame.size == 0:
+            # Video ended or invalid frame
             break
             
         frame_count += 1
@@ -399,6 +404,15 @@ def process_video(video_source, is_live=False):
                             processed_ids.add(track_id)
 
         stframe.image(frame, channels="BGR", width="stretch")
+        
+        # Update progress bar and show timestamp
+        if total_frames > 0:
+            progress = min(frame_count / total_frames, 1.0)
+            progress_bar.progress(progress)
+            
+            # Calculate and display current timestamp
+            current_second = frame_count / fps
+            stframe.caption(f"⏱️ Video Time: {current_second:.1f}s / {total_frames/fps:.1f}s")
     
     cap.release()
     
