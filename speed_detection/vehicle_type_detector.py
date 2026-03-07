@@ -247,6 +247,20 @@ def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh,
                 VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s)
             """, (challan_number, vehicle_number, vehicle_type, 
                   speed_kmh, speed_limit, location, fine_amount, evidence_path))
+            
+            # Update vehicle record with challan information
+            cursor.execute("""
+                UPDATE vehicle_records 
+                SET challan_generated = TRUE, challan_amount = %s
+                WHERE vehicle_number = %s
+            """, (fine_amount, vehicle_number))
+        else:
+            # For normal vehicles, ensure challan_generated is FALSE
+            cursor.execute("""
+                UPDATE vehicle_records 
+                SET challan_generated = FALSE, challan_amount = 0.0
+                WHERE vehicle_number = %s
+            """, (vehicle_number,))
         
         conn.commit()
         

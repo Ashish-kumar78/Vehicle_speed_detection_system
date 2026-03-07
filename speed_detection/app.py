@@ -230,7 +230,7 @@ def extract_license_plate(frame, bbox):
 # ================================
 # Video Processing Loop
 # ================================
-def process_video(video_source, is_live=False):
+def process_video(video_source, is_live=False, detection_size=(640, 384), confidence=0.35):
     cap = cv2.VideoCapture(video_source)
     settings = fetch_system_settings()
     
@@ -254,6 +254,20 @@ def process_video(video_source, is_live=False):
     # Create progress bar
     progress_bar = st.progress(0)
     
+    # SMART processing: Process every frame for accuracy, but display less frequently
+    # This maintains detection accuracy while reducing UI update overhead
+    
+    # Detection statistics
+    total_detections = 0  # Count of ALL detection instances
+    vehicles_tracked = set()  # Unique track IDs
+    frame_detections_count = 0  # Detections in current frame
+    detection_log = []  # Track when each vehicle crosses lines
+    
+    # Calculate scaling factors
+    detect_width, detect_height = detection_size
+    scale_x = 1020 / detect_width
+    scale_y = 600 / detect_height
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret or frame is None or frame.size == 0:
@@ -261,6 +275,9 @@ def process_video(video_source, is_live=False):
             break
             
         frame_count += 1
+        
+        # Process EVERY frame - NO skipping for accurate counting
+        
         # Refresh settings real-time from Django DB every 30 frames
         if frame_count % 30 == 0:
             settings = fetch_system_settings()
@@ -269,18 +286,40 @@ def process_video(video_source, is_live=False):
             
         frame = cv2.resize(frame, (1020, 600))
         
-        # YOLO Tracking with Vehicle Type Detection
-        results = model.track(frame, persist=True, classes=ALLOWED_CLASSES, conf=0.6, tracker="bytetrack.yaml")
+        # YOLO Tracking - SMART speed optimization
+        # Use configurable input size for faster processing while maintaining accuracy
+        # Process every frame but with optimized settings
+        
+        # Smart frame sizing: detect on smaller image for speed
+        detect_frame = cv2.resize(frame, detection_size)
+        results = model.track(detect_frame, persist=True, classes=ALLOWED_CLASSES, conf=confidence, tracker="bytetrack.yaml", verbose=False)
         
         cv2.line(frame, (0, LINE_1), (1020, LINE_1), (0, 255, 0), 2)
         cv2.line(frame, (0, LINE_2), (1020, LINE_2), (0, 255, 255), 2)
         cv2.putText(frame, "Start Line", (10, LINE_1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, "End Line", (10, LINE_2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
+        # Display detection stats on frame
+        cv2.putText(frame, f"Frame: {frame_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
         if results[0].boxes and results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
             track_ids = results[0].boxes.id.int().cpu().numpy()
             cls_ids = results[0].boxes.cls.int().cpu().numpy()
+            
+            # Update detection statistics
+            current_frame_detections = len(track_ids)
+            total_detections += current_frame_detections
+            vehicles_tracked.update(track_ids)
+            
+            # Scale boxes back to original frame size (using pre-calculated factors)
+            boxes[:, 0::2] *= scale_x  # Scale x coordinates
+            boxes[:, 1::2] *= scale_y  # Scale y coordinates
+            
+            # Display detection count on frame
+            cv2.putText(frame, f"Frame Detections: {current_frame_detections}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, f"Total Unique Vehicles: {len(vehicles_tracked)}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, f"All-Time Detections: {total_detections}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
             # Get vehicle types for all detections
             vehicle_types = [model.names[cls_id] for cls_id in cls_ids]
@@ -305,11 +344,23 @@ def process_video(video_source, is_live=False):
                 if LINE_1 - 10 < cy < LINE_1 + 10:
                     if track_id not in cross_line1:
                         cross_line1[track_id] = time.time()
+                        detection_log.append({
+                            'track_id': track_id,
+                            'vehicle_type': v_type,
+                            'line1_time': cross_line1[track_id],
+                            'frame': frame_count
+                        })
                 
                 # Check crossing Line 2
                 if LINE_2 - 10 < cy < LINE_2 + 10:
                     if track_id in cross_line1 and track_id not in cross_line2 and track_id not in processed_ids:
                         cross_line2[track_id] = time.time()
+                        detection_log.append({
+                            'track_id': track_id,
+                            'vehicle_type': v_type,
+                            'line2_time': cross_line2[track_id],
+                            'frame': frame_count
+                        })
                         
                         time_elapsed = cross_line2[track_id] - cross_line1[track_id]
                         if time_elapsed > 0:
@@ -344,30 +395,27 @@ def process_video(video_source, is_live=False):
                                         )
                                         
                                         if success:
-                                            st.success(f"✅ Vehicle {plate} saved to database!")
+                                            st.toast(f"✅ Vehicle {plate} saved!", icon="success")
                                         else:
-                                            st.error(f"❌ Failed to save {plate} to database")
+                                            st.toast(f"❌ Failed to save {plate}", icon="error")
                                             
                                         # Generate challan number for display
                                         challan_num = f"CHALLAN_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
                                         
-                                        # Display violation alert
+                                        # Display violation alert (compact)
                                         alert_info = display_violation_alert(
                                             plate, v_type, speed_kmh, speed_limit, "Highway Sector 4"
                                         )
                                         
-                                        # Show rich notification
-                                        with st.expander(f"🚨 VIOLATION DETECTED - {plate}", expanded=True):
+                                        with st.expander(f"🚨 VIOLATION - {plate}", expanded=False):
                                             col1, col2 = st.columns(2)
                                             with col1:
-                                                st.metric("Vehicle Type", alert_info['vehicle_type'])
-                                                st.metric("Speed Detected", alert_info['speed_detected'])
+                                                st.metric("Speed", f"{alert_info['speed_detected']:.1f} km/h")
+                                                st.metric("Limit", f"{alert_info['speed_limit']:.1f} km/h")
                                             with col2:
-                                                st.metric("Speed Limit", alert_info['speed_limit'])
-                                                st.metric("Excess Speed", alert_info['excess_speed'])
-                                            st.error(f"📍 Location: {alert_info['location']}")
-                                            st.warning(f"🎫 Challan Generated: {challan_num}")
-                                            st.info(f"⏰ Time: {alert_info['date']}")
+                                                st.metric("Excess", f"{alert_info['excess_speed']:.1f} km/h")
+                                                st.metric("Type", alert_info['vehicle_type'])
+                                            st.caption(f"📍 {alert_info['location']} | {alert_info['date']}")
                                         
                                         # Send notification
                                         send_notification(
@@ -375,7 +423,7 @@ def process_video(video_source, is_live=False):
                                             challan_num, settings['admin_email']
                                         )
                                     except Exception as e:
-                                        st.error(f"Database error: {e}")
+                                        st.toast(f"Database error: {e}", icon="warning")
                                     finally:
                                         conn.close()
                             else:
@@ -395,34 +443,92 @@ def process_video(video_source, is_live=False):
                                             conn=conn,
                                             distance_m=dist_m
                                         )
-                                        st.success(f"✅ Vehicle {plate} (Normal) saved to database")
                                     except Exception as e:
-                                        st.error(f"Error saving normal vehicle: {e}")
+                                        st.toast(f"Error: {e}", icon="warning")
                                     finally:
                                         conn.close()
                             
                             processed_ids.add(track_id)
 
+        # Display EVERY frame for smooth playback and accurate visualization
         stframe.image(frame, channels="BGR", width="stretch")
         
-        # Update progress bar and show timestamp
+        # Update progress bar less frequently to reduce overhead
         if total_frames > 0:
             progress = min(frame_count / total_frames, 1.0)
-            progress_bar.progress(progress)
-            
-            # Calculate and display current timestamp
-            current_second = frame_count / fps
-            stframe.caption(f"⏱️ Video Time: {current_second:.1f}s / {total_frames/fps:.1f}s")
+            # Only update progress every 5 frames to reduce UI overhead
+            if frame_count % 5 == 0:
+                progress_bar.progress(progress)
     
     cap.release()
     
     # Show completion message
+    progress_bar.progress(1.0)
     st.success("✅ Video processing completed!")
-    st.info(f"📊 Processed {len(processed_ids)} vehicles in total")
+    
+    # Display detailed statistics with clear labels
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Frames Processed", frame_count)
+    with col2:
+        st.metric("Total Detection Instances", total_detections, 
+                  help="Sum of all vehicle detections across all frames (same vehicle in multiple frames = multiple detections)")
+    with col3:
+        st.metric("Unique Vehicles Tracked", len(vehicles_tracked),
+                  help="Number of different individual vehicles (each vehicle counted once)")
+    
+    st.info(f"📊 **{len(processed_ids)} vehicles** successfully crossed both detection lines and had speed calculated")
+    
+    # Show detection timeline
+    if len(detection_log) > 0:
+        with st.expander("📋 Detailed Detection Timeline", expanded=False):
+            st.write("**Vehicle Crossing Log:**")
+            for entry in detection_log:
+                if 'line1_time' in entry and 'line2_time' not in entry:
+                    st.caption(f"🟢 Vehicle ID {entry['track_id']} ({entry['vehicle_type']}) crossed Line 1 at Frame {entry['frame']}")
+                elif 'line2_time' in entry:
+                    st.caption(f"🔴 Vehicle ID {entry['track_id']} ({entry['vehicle_type']}) crossed Line 2 at Frame {entry['frame']}")
+            
+            st.divider()
+            st.write("**📈 Statistics Explanation:**")
+            st.write("""
+            - **Detection Instances**: Every time a vehicle is detected in a frame
+            - **Unique Vehicles**: Each different vehicle (by tracking ID)
+            - **Example**: If 5 cars each appear in 100 frames = 500 detections, 5 unique vehicles
+            """)
     
     # Display summary if any vehicles were detected
     if len(processed_ids) > 0:
         st.balloons()
+        st.success(f"🎉 Successfully detected and processed **{len(processed_ids)} actual vehicles**!")
+        
+        # Show breakdown by vehicle type
+        if len(detection_log) > 0:
+            vehicle_types_detected = {}
+            for entry in detection_log:
+                vtype = entry['vehicle_type']
+                if vtype not in vehicle_types_detected:
+                    vehicle_types_detected[vtype] = set()
+                vehicle_types_detected[vtype].add(entry['track_id'])
+            
+            with st.expander("📊 Vehicle Type Breakdown"):
+                st.write("**Vehicles detected by type:**")
+                for vtype, track_ids in vehicle_types_detected.items():
+                    st.write(f"- **{vtype.title()}**: {len(track_ids)} vehicles")
+    else:
+        st.warning("⚠️ No vehicles completed crossing both detection lines.")
+        st.info("""
+        **Possible reasons:**
+        - No vehicles in the video
+        - Vehicles didn't cross both green/yellow lines
+        - Camera angle doesn't match line positions
+        - Low video quality affecting detection
+        
+        **Tips:**
+        - Ensure video shows vehicles moving from top to bottom
+        - Adjust camera angle or line positions in code
+        - Use videos with clear vehicle visibility
+        """)
 
 # ================================
 # UI Rendering
@@ -477,6 +583,40 @@ if page == "Dashboard":
             
             st.markdown("---")
             
+            # Show blocked licenses details if any
+            if blocked_count > 0:
+                st.error(f"🚨 **{blocked_count} License(s) Blocked** - Vehicles with 3 or more violations")
+                
+                # Get blocked vehicles
+                blocked_df = df[df['violation_count'] >= 3].sort_values('violation_count', ascending=False)
+                
+                with st.expander(f"📋 View Blocked Licenses ({blocked_count} vehicles)", expanded=True):
+                    st.write("**These vehicles have been blocked due to repeated overspeeding violations:**")
+                    
+                    for idx, row in blocked_df.iterrows():
+                        # Check if challan was generated
+                        has_challan = row.get('challan_generated', False) or pd.notna(row.get('challan_amount', 0)) and row['challan_amount'] > 0
+                        challan_amt = row.get('challan_amount', 0.0) if pd.notna(row.get('challan_amount', None)) else 0.0
+                        
+                        st.markdown(f"""
+                        #### 🚫 {row['vehicle_number'].upper()}
+                        - **Vehicle Type:** {row['vehicle_type'].upper()}
+                        - **Total Violations:** {row['violation_count']} (Threshold: 3)
+                        - **Last Speed:** {row['speed_kmh']:.1f} km/h
+                        - **Status:** {'⚠️ OVERSPEED' if row['status'] == 'overspeed' else '✅ Normal'}
+                        - **E-Challan:** {'✅ Generated' if has_challan else '❌ Not Generated'}
+                        {f"- **Fine Amount:** ₹{challan_amt:.2f}" if has_challan else ''}
+                        - **Last Seen:** {row['timestamp'].strftime('%d-%m-%Y %H:%M:%S')}
+                        ---
+                        """)
+                    
+                    st.warning("""
+                    **⚠️ Blocking Rules:**
+                    - 1st violation: Warning email sent
+                    - 2nd violation: Second warning email  
+                    - 3rd+ violation: License BLOCKED automatically
+                    """)
+            
             # Charts in tabs for better organization
             tab1, tab2, tab3 = st.tabs(["📈 Speed Analysis", "📊 Violation Trends", "📋 Recent Records"])
             
@@ -522,34 +662,103 @@ elif page == "Live Camera":
     
     if st.button("🎬 Start Live Feed", use_container_width=True):
         with st.spinner("Initializing camera and loading models..."):
-            process_video(0, is_live=True)
+            # Use balanced settings for live feed
+            process_video(0, is_live=True, detection_size=(640, 384), confidence=0.35)
 
 elif page == "Video Upload":
     st.title("📁 Upload Video for Detection")
     st.markdown("### Analyze recorded footage for overspeeding violations")
     
+    # Initialize session state for temp file path
+    if 'temp_video_path' not in st.session_state:
+        st.session_state.temp_video_path = None
+    
+    # Processing mode selection
+    processing_mode = st.radio(
+        "⚙️ Processing Mode:",
+        options=["Fast (Quick)", "Accurate (Recommended)", "Maximum Accuracy"],
+        help="Choose between faster processing or higher detection accuracy",
+        index=1  # Default to Accurate
+    )
+    
+    # Set processing parameters based on mode
+    if processing_mode == "Fast (Quick)":
+        DETECTION_SIZE = (512, 288)  # Smallest - fastest
+        CONFIDENCE_THRESHOLD = 0.3
+        st.info("⚡ Fast mode: Lower resolution detection for speed")
+    elif processing_mode == "Accurate (Recommended)":
+        DETECTION_SIZE = (640, 384)  # Medium - balanced
+        CONFIDENCE_THRESHOLD = 0.35
+        st.info("✓ Balanced mode: Good speed and accuracy")
+    else:  # Maximum Accuracy
+        DETECTION_SIZE = (1020, 600)  # Full size - most accurate
+        CONFIDENCE_THRESHOLD = 0.25
+        st.info("🎯 Maximum accuracy: Full resolution detection (slower)")
+    
     # Show supported formats
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Choose a video file",
-            type=['mp4', 'avi', 'mov', 'mkv'],
-            help="Supported formats: MP4, AVI, MOV, MKV"
-        )
+    uploaded_file = st.file_uploader(
+        "Choose a video file",
+        type=['mp4', 'avi', 'mov', 'mkv'],
+        help="Supported formats: MP4, AVI, MOV, MKV"
+    )
     
     if uploaded_file is not None:
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
-        
-        # Show video preview in sidebar
-        with col2:
-            st.video(tfile.name)
-        
-        st.success(f"✅ Uploaded: {uploaded_file.name}")
-        
-        if st.button("🚀 Process Video", use_container_width=True):
-            with st.spinner("⏳ Processing video. This may take a while..."):
-                process_video(tfile.name)
+        try:
+            # Create temporary file and write uploaded content
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            temp_path = tfile.name
+            tfile.write(uploaded_file.read())
+            tfile.close()  # IMPORTANT: Close the file handle before using it
+            
+            # Store temp path in session state for cleanup
+            st.session_state.temp_video_path = temp_path
+            
+            # Show video preview in full width
+            st.success(f"✅ Uploaded: {uploaded_file.name}")
+            st.video(temp_path)
+            
+            # Display video info
+            cap = cv2.VideoCapture(temp_path)
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = total_frames / fps if fps > 0 else 0
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Duration", f"{duration:.1f}s")
+                with col2:
+                    st.metric("FPS", f"{fps:.1f}")
+                with col3:
+                    st.metric("Resolution", f"{width}x{height}")
+                with col4:
+                    st.metric("Total Frames", total_frames)
+                cap.release()
+            
+            if st.button("🚀 Process Video", use_container_width=True):
+                with st.spinner("⏳ Processing video. This may take a while..."):
+                    try:
+                        process_video(temp_path, detection_size=DETECTION_SIZE, confidence=CONFIDENCE_THRESHOLD)
+                    finally:
+                        # Clean up temporary file after processing
+                        if os.path.exists(temp_path):
+                            try:
+                                os.unlink(temp_path)
+                                st.session_state.temp_video_path = None
+                            except Exception as cleanup_error:
+                                st.warning(f"⚠️ Could not delete temp file: {cleanup_error}")
+                                
+        except Exception as e:
+            st.error(f"❌ Error processing uploaded file: {e}")
+            # Clean up on error
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                    st.session_state.temp_video_path = None
+                except:
+                    pass
 
 elif page == "E-Challans":
     st.title("🎫 E-Challan Management System")
@@ -650,30 +859,159 @@ elif page == "Records":
     conn = get_db_connection()
     if conn:
         # Search with better UI
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([3, 1, 1])
         with col1:
             search = st.text_input(
                 "🔍 Search by Vehicle Number",
                 placeholder="Enter vehicle number (e.g., ABC123)"
             )
         
-        query = "SELECT * FROM vehicle_records"
+        with col2:
+            # Filter by violation count
+            violation_filter = st.selectbox(
+                "🚫 Violation Count",
+                options=["All", "Blocked (3+)", "Warning (1-2)", "Clean (0)"],
+                help="Filter vehicles by violation count"
+            )
+        
+        with col3:
+            status_filter = st.selectbox(
+                "Status",
+                options=["All", "overspeed", "normal"]
+            )
+        
+        # Build query
+        query = "SELECT * FROM vehicle_records WHERE 1=1"
+        
         if search:
-            query += f" WHERE vehicle_number LIKE '%{search}%'"
+            query += f" AND vehicle_number LIKE '%{search}%'"
             st.info(f"Showing results for: {search}")
+        
+        if violation_filter == "Blocked (3+)":
+            query += " AND violation_count >= 3"
+        elif violation_filter == "Warning (1-2)":
+            query += " AND violation_count BETWEEN 1 AND 2"
+        elif violation_filter == "Clean (0)":
+            query += " AND violation_count = 0"
+        
+        if status_filter != "All":
+            query += f" AND status = '{status_filter}'"
+        
+        query += " ORDER BY violation_count DESC, timestamp DESC"
         
         df = pd.read_sql(query, conn)
         conn.close()
         
         if not df.empty:
             # Show summary stats
-            total_col, overspeed_col, normal_col = st.columns(3)
+            total_col, overspeed_col, normal_col, blocked_col = st.columns(4)
             with total_col:
                 st.metric("Total Records", len(df))
             with overspeed_col:
                 st.metric("Violations", len(df[df['status'] == 'overspeed']))
             with normal_col:
                 st.metric("Normal", len(df[df['status'] == 'normal']))
+            with blocked_col:
+                blocked_count = len(df[df['violation_count'] >= 3])
+                st.metric("🚫 Blocked", blocked_count)
+            
+            # Highlight blocked vehicles with detailed cards
+            if blocked_count > 0:
+                st.error(f"🚨 **ALERT: {blocked_count} Vehicle(s) BLOCKED** - License suspended due to 3+ violations")
+                
+                # Show blocked vehicles in expandable section
+                blocked_vehicles = df[df['violation_count'] >= 3].sort_values('violation_count', ascending=False)
+                
+                with st.expander(f"📋 Click to View {blocked_count} Blocked Vehicle Details", expanded=True):
+                    st.write("**⛔ These vehicles have been BLOCKED due to repeated overspeeding violations:**")
+                    st.divider()
+                    
+                    for idx, row in blocked_vehicles.iterrows():
+                        # Check if challan was generated
+                        has_challan = row.get('challan_generated', False) or (pd.notna(row.get('challan_amount', 0)) and row['challan_amount'] > 0)
+                        challan_amt = row.get('challan_amount', 0.0) if pd.notna(row.get('challan_amount', None)) else 0.0
+                        
+                        # Calculate excess speed
+                        speed_limit = 60.0  # Default, could be fetched from settings
+                        excess_speed = row['speed_kmh'] - speed_limit if row['speed_kmh'] > speed_limit else 0
+                        
+                        # Determine violation severity
+                        if row['violation_count'] >= 5:
+                            severity = "CRITICAL"
+                            severity_color = "#990000"
+                        elif row['violation_count'] >= 3:
+                            severity = "HIGH"
+                            severity_color = "#cc0000"
+                        else:
+                            severity = "WARNING"
+                            severity_color = "#ff9900"
+                        
+                        # Create card using Streamlit components instead of HTML
+                        with st.container():
+                            # Header with vehicle number and severity
+                            header_col1, header_col2 = st.columns([3, 1])
+                            with header_col1:
+                                st.markdown(f"**🚫 {row['vehicle_number'].upper()}**")
+                            with header_col2:
+                                st.markdown(f"**{severity}**")
+                            
+                            st.divider()
+                            
+                            # Two column layout for details
+                            detail_col1, detail_col2 = st.columns(2)
+                            
+                            with detail_col1:
+                                st.markdown(f"""
+                                **Vehicle Information:**
+                                - Type: {row['vehicle_type'].upper()}
+                                - Violations: **{row['violation_count']}**
+                                - Last Speed: {row['speed_kmh']:.1f} km/h {'⚠️' if row['speed_kmh'] > 80 else ''}
+                                """)
+                            
+                            with detail_col2:
+                                challan_status = "✅ Generated" if has_challan else "❌ Not Generated"
+                                fine_info = f"- Fine: ₹{challan_amt:.2f}" if has_challan else ""
+                                st.markdown(f"""
+                                **Violation Details:**
+                                - Status: {'⚠️ OVERSPEED' if row['status'] == 'overspeed' else '✅ Normal'}
+                                - E-Challan: {challan_status}
+                                {fine_info}
+                                """)
+                            
+                            # Excess speed and timestamp
+                            if excess_speed > 0:
+                                st.error(f"**Excess Speed:** {excess_speed:.1f} km/h over limit ⚠️")
+                            else:
+                                st.success("**Excess Speed:** ✓ Within speed limit")
+                            
+                            st.caption(f"Last Detected: 🕒 {row['timestamp'].strftime('%d-%m-%Y %H:%M:%S')}")
+                            
+                            # Blocked warning
+                            st.error(f"**⛔ LICENSE BLOCKED** - No further violations allowed")
+                            st.info("This vehicle must be reviewed by an admin before it can operate legally.")
+                            
+                            st.markdown("---")
+                    
+                    st.divider()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.info("""
+                        **📋 Automatic Blocking Rules:**
+                        - 🟡 **1st violation**: Warning email
+                        - 🟠 **2nd violation**: Final warning
+                        - 🔴 **3rd+ violation**: BLOCKED
+                        """)
+                    with col2:
+                        st.warning("""
+                        **⚠️ Admin Action Required:**
+                        Blocked vehicles need admin review
+                        before they can be unblocked.
+                        """)
+            
+            # Highlight vehicles with challans
+            challan_count = len(df[df.get('challan_generated', False) == True]) if 'challan_generated' in df.columns else 0
+            if challan_count > 0:
+                st.success(f"✅ **{challan_count} vehicle(s)** have e-challans generated with fines collected")
             
             st.markdown("---")
             st.dataframe(df, width="stretch")
