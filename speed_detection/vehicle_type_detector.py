@@ -243,8 +243,8 @@ def store_violation_in_db(vehicle_number, vehicle_type, speed_kmh,
                 INSERT INTO e_challans 
                 (challan_number, vehicle_number, vehicle_type, 
                  speed_detected, speed_limit, location, violation_date, 
-                 fine_amount, evidence_image_path)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+                 fine_amount, status, evidence_image_path)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, 'pending', %s)
             """, (challan_number, vehicle_number, vehicle_type, 
                   speed_kmh, speed_limit, location, fine_amount, evidence_path))
             
